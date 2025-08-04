@@ -1,5 +1,6 @@
 const puppeteer = require("puppeteer");
 const express = require("express");
+const fs = require("fs");
 
 const app = express();
 app.use(express.json());
@@ -10,16 +11,33 @@ app.post("/generate", async (req, res) => {
 
   const browser = await puppeteer.launch({
     headless: true,
-    args: ["--no-sandbox"]
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
   const page = await browser.newPage();
+
+  // 🔐 Load session (jika ada)
+  const cookiesPath = "./gamma-session.json";
+  if (fs.existsSync(cookiesPath)) {
+    const cookies = JSON.parse(fs.readFileSync(cookiesPath, "utf-8"));
+    await page.setCookie(...cookies);
+  }
+
   await page.goto("https://gamma.app", { waitUntil: "networkidle2" });
 
-  // Kalau belum login: stop di sini, login manual dulu, simpan session kalau perlu
-  await page.waitForSelector('button:has-text("Create a deck")');
-  await page.click('button:has-text("Create a deck")');
+  // 🔐 Simpan session baru kalau belum ada
+  if (!fs.existsSync(cookiesPath)) {
+    const cookies = await page.cookies();
+    fs.writeFileSync(cookiesPath, JSON.stringify(cookies, null, 2));
+    return res.status(200).json({ message: "Login dulu di Railway browser, session disimpan" });
+  }
 
+  // 🚀 Lanjutkan ke proses pembuatan presentasi
+  await page.waitForSelector('button:has-text("Create a deck")', { timeout: 10000 }).catch(() => {
+    return res.status(400).json({ error: "Tombol 'Create a deck' tidak ditemukan. Mungkin perlu login manual dulu." });
+  });
+
+  await page.click('button:has-text("Create a deck")');
   await page.waitForSelector("textarea");
   await page.type("textarea", prompt);
   await page.keyboard.press("Enter");
@@ -31,4 +49,6 @@ app.post("/generate", async (req, res) => {
   res.json({ url: currentUrl });
 });
 
-app.listen(3000, () => console.log("Gamma bot ready on port 3000"));
+// ✅ PORT untuk Railway
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Gamma bot ready on port ${port}`));
